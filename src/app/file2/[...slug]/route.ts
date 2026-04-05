@@ -264,10 +264,19 @@ export async function HEAD(
     if (!session) {
       return new NextResponse(null, { status: 403, headers: corsHeaders() });
     }
+
+    // Return correct Content-Type so Vidstack knows it's HLS
+    // No restPath = master m3u8 | .m3u8 = playlist | else = binary segment
+    const restPath = slug.slice(1).join("/");
+    let ct = "application/octet-stream"; // default for .ts segments
+    if (!restPath) ct = "application/vnd.apple.mpegurl";
+    else if (restPath.endsWith(".m3u8")) ct = "application/vnd.apple.mpegurl";
+    else if (restPath.endsWith(".key")) ct = "application/octet-stream";
+
     return new NextResponse(null, {
       status: 200,
       headers: {
-        "Content-Type": "application/octet-stream",
+        "Content-Type": ct,
         "Access-Control-Allow-Origin": "*",
         "Cache-Control": "no-store",
         "Accept-Ranges": "bytes",
