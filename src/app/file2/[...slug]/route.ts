@@ -129,12 +129,16 @@ export async function GET(
     refererUrl = activeBase;
   }
 
+  // Use the deployment domain as Origin (workers whitelist it)
+  const requestOrigin = request.headers.get("origin") || request.headers.get("referer") || "";
+  const clientOrigin = requestOrigin ? new URL(requestOrigin).origin : refererUrl;
+
   const fetchHeaders: Record<string, string> = {
     "User-Agent": UA,
     "Accept": "*/*",
     "Accept-Language": "en-US,en;q=0.9",
-    "Origin": refererUrl,
-    "Referer": refererUrl + "/",
+    "Origin": clientOrigin,
+    "Referer": clientOrigin + "/",
   };
 
   let response: Response;
@@ -152,7 +156,7 @@ export async function GET(
         const fallbackUrl = restPath
           ? resolveUrl(fallbackBase, restPath)
           : fallbackBase;
-        const fbHeaders = { ...fetchHeaders, Referer: fallbackBase + "/" };
+        const fbHeaders = { ...fetchHeaders, Origin: clientOrigin, Referer: clientOrigin + "/" };
         response = await fetchWithRetry(fallbackUrl, {
           headers: fbHeaders,
           redirect: "follow",
@@ -166,16 +170,16 @@ export async function GET(
     }
   }
 
-const contentType = response.headers.get("Content-Type") || "";
-const bodyText = await response.text();
-const isM3u8 =
-  contentType.includes("mpegurl") ||
-  contentType.includes("x-mpegURL") ||
-  contentType.includes("vnd.apple.mpegurl") ||
-  bodyText.trimStart().startsWith("#EXTM3U");
+  // Check if m3u8 — detect by content-type OR body content
+  const contentType = response.headers.get("Content-Type") || "";
+  const bodyText = await response.text();
+  const isM3u8 =
+    contentType.includes("mpegurl") ||
+    contentType.includes("x-mpegURL") ||
+    contentType.includes("vnd.apple.mpegurl") ||
+    bodyText.trimStart().startsWith("#EXTM3U");
 
-if (isM3u8) {
-    const body = await response.text();
+  if (isM3u8) {
     const effectiveBase = restPath
       ? resolveUrl(activeBase, restPath)
           .substring(0, resolveUrl(activeBase, restPath).lastIndexOf("/") + 1)
@@ -183,7 +187,7 @@ if (isM3u8) {
 
     const tokenSlug = sessionToken;
     const svParam = svIdx > 0 ? "?_sv=" + svIdx : "";
-    const rewritten = rewriteM3u8(body, effectiveBase, tokenSlug, svParam);
+    const rewritten = rewriteM3u8(bodyText, effectiveBase, tokenSlug, svParam);
 
     return new NextResponse(rewritten, {
       status: 200,
@@ -195,6 +199,7 @@ if (isM3u8) {
     });
   }
 
+  // Non-m3u8 (segments, keys) → stream through
   const headers = filterHeaders(response.headers);
   headers.set("Access-Control-Allow-Origin", "*");
   headers.set("Cache-Control", "public, max-age=86400");
