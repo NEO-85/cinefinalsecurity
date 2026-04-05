@@ -49,6 +49,7 @@ export async function resolveStreams(tmdbId: string, type: string, season?: stri
     if (r.status === "fulfilled" && r.value.url) {
       servers.push({ name: SERVERS[i].name, url: r.value.url });
     } else {
+      // Store debug info on the result for error reporting
       const debug = r.status === "fulfilled" ? r.value.debug : "Promise rejected";
       console.error(`[resolveStreams] ${SERVERS[i].name}: ${debug}`);
     }
@@ -272,7 +273,7 @@ export function generatePlayerPage(
       menuOpen=false;document.getElementById('svMenu').classList.remove('open');
       document.getElementById('switchText').textContent='Switching to '+SERVER_LIST[idx].name+'...';
       document.getElementById('switchOverlay').classList.add('show');
-      player.src='/file2/'+encodeURIComponent(SESSION_TOKEN)+'?_sv='+idx;
+      player.src='/file2/'+SESSION_TOKEN+'?_sv='+idx;
     }
 
     /* ── TMDB helpers ── */
@@ -380,6 +381,7 @@ export function generatePlayerPage(
       /* Step 2: Check for errors */
       if(streamData.error){
         document.getElementById('initOverlay').classList.add('hide');
+        document.getElementById('errorDesc').textContent='Reason: '+(streamData.reason||'unknown')+' | Servers: '+JSON.stringify(servers);
         document.getElementById('errorOverlay').classList.add('show');
         window.parent.postMessage({event:'player_error',reason:streamData.reason||'unknown'},'*');
         return;
@@ -418,7 +420,9 @@ export function generatePlayerPage(
       /* Step 8: SET PLAYER SRC TO PROXY — CLIENT NEVER SEES EXTERNAL URL */
       document.getElementById('initText').textContent='Starting playback...';
       document.getElementById('initSub').textContent='Stream proxied via secure tunnel';
-      player.src='/file2/'+encodeURIComponent(SESSION_TOKEN);
+      console.log('[Cinetaro] Token length:',SESSION_TOKEN.length,'Token preview:',SESSION_TOKEN.substring(0,20)+'...');
+      console.log('[Cinetaro] Server count:',streamData.count,'Name:',streamData.name);
+      player.src='/file2/'+SESSION_TOKEN;
     }
 
     /* ── Player events ── */
@@ -428,7 +432,8 @@ export function generatePlayerPage(
         document.getElementById('switchOverlay').classList.remove('show');
         if(AUTOPLAY&&!player._started){player._started=true;player.play().catch(()=>{})}
       },{once:false});
-      player.addEventListener('error',function(){
+      player.addEventListener('error',function(e){
+        console.log('[Cinetaro] Player error:',e,'src:',player.src,'currentSv:',currentSvIdx,'total:',TOTAL_SERVERS);
         document.getElementById('initOverlay').classList.add('hide');
         // Auto-failover to next server
         if(currentSvIdx<TOTAL_SERVERS-1){
@@ -436,6 +441,7 @@ export function generatePlayerPage(
           switchServer(n);
         }else{
           document.getElementById('switchOverlay').classList.remove('show');
+          document.getElementById('errorDesc').textContent='All servers failed ('+TOTAL_SERVERS+' tried). Player src was: '+player.src;
           document.getElementById('errorOverlay').classList.add('show');
           window.parent.postMessage({event:'player_error',reason:'stream_error'},'*');
         }
