@@ -42,6 +42,9 @@ async function fetchWithRetry(url: string, opts: RequestInit, retries = 1): Prom
   }
 }
 
+/**
+ * Rewrite all URLs in m3u8 to use /file2/TOKEN/path format.
+ */
 function rewriteM3u8(content: string, baseUrl: string, tokenSlug: string, svParam: string = ""): string {
   const baseOrigin = getOrigin(baseUrl);
   const prefix = "/file2/" + tokenSlug;
@@ -105,33 +108,43 @@ export async function GET(
     return new NextResponse("Invalid path", { status: 400 });
   }
 
+  // First segment = encrypted session token
   const sessionToken = slug[0];
   const restPath = slug.slice(1).join("/");
   const sp = new URL(request.url).searchParams;
   const svIdx = parseInt(sp.get("_sv") || "0");
 
+  // Decode session
   const session = await decodeSessionToken(sessionToken);
   if (!session) {
     return new NextResponse("Invalid or expired session", { status: 403 });
   }
 
+  // Pick the requested server
   const serverIndex = Math.min(svIdx, session.servers.length - 1);
   const activeBase = session.servers[serverIndex] || session.baseUrl;
 
+  // Determine what to fetch
   let fetchUrl: string;
   let refererUrl: string;
 
   if (restPath) {
+    // Has a path → resolve against active server URL
     fetchUrl = resolveUrl(activeBase, restPath);
     refererUrl = activeBase;
   } else {
+    // No path → fetch the active server URL (master m3u8)
     fetchUrl = activeBase;
     refererUrl = activeBase;
   }
 
-  // Use the deployment domain as Origin (workers whitelist it)
-  const requestOrigin = request.headers.get("origin") || request.headers.get("referer") || "";
-  const clientOrigin = requestOrigin ? new URL(requestOrigin).origin : refererUrl;
+  // The Host header is ALWAYS sent by browsers (even on same-origin requests).
+  // Origin header is only sent on cross-origin requests — so for same-origin it's null.
+  // Use Host to build the correct Origin that the Cloudflare Workers whitelist.
+  const requestHost = request.headers.get("host") || "";
+  const clientOrigin = requestHost
+    ? `https://${requestHost.split(":")[0]}`
+    : refererUrl;
 
   const fetchHeaders: Record<string, string> = {
     "User-Agent": UA,
@@ -149,6 +162,7 @@ export async function GET(
       redirect: "follow",
     });
   } catch {
+    // Failover to backup servers
     let found = false;
     for (let i = 1; i < session.servers.length; i++) {
       try {
@@ -156,7 +170,7 @@ export async function GET(
         const fallbackUrl = restPath
           ? resolveUrl(fallbackBase, restPath)
           : fallbackBase;
-        const fbHeaders = { ...fetchHeaders, Origin: clientOrigin, Referer: clientOrigin + "/" };
+        const fbHeaders = { ...fetchHeaders, Referer: clientOrigin + "/" };
         response = await fetchWithRetry(fallbackUrl, {
           headers: fbHeaders,
           redirect: "follow",
@@ -170,7 +184,7 @@ export async function GET(
     }
   }
 
-  // Check if m3u8 — detect by content-type OR body content
+  // Check if m3u8 → rewrite URLs (detect by content-type OR body content)
   const contentType = response.headers.get("Content-Type") || "";
   const bodyText = await response.text();
   const isM3u8 =
@@ -217,6 +231,7 @@ export async function HEAD(
   _request: NextRequest,
   { params }: { params: Promise<{ slug: string[] }> }
 ) {
+  // HLS players send HEAD to check if URL exists — just validate token, no upstream fetch
   try {
     const { slug } = await params;
     if (!slug || slug.length < 1) {
