@@ -23,28 +23,46 @@ function buildApiUrl(cfg: { base: string; path?: string }, tmdbId: string, type:
   return `${cfg.base}/movie/${tmdbId}`;
 }
 
-async function tryServer(cfg: { base: string; proxy?: string; referer?: boolean; timeout?: number; path?: string }, tmdbId: string, type: string, season?: string | null, episode?: string | null): Promise<string | null> {
+async function tryServer(cfg: { base: string; proxy?: string; referer?: boolean; timeout?: number; path?: string }, tmdbId: string, type: string, season?: string | null, episode?: string | null): Promise<{ url: string | null; debug: string }> {
   const apiUrl = buildApiUrl(cfg, tmdbId, type, season, episode);
   const headers: Record<string, string> = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" };
   if (cfg.referer) headers["Referer"] = cfg.base;
   try {
     const res = await fetchWithTimeout(apiUrl, { headers }, cfg.timeout || 8000);
-    if (!res.ok) return null;
+    if (!res.ok) return { url: null, debug: `HTTP ${res.status} from ${apiUrl}` };
     const data = await res.json();
     if (data && data.stream && typeof data.stream === "string") {
       let stream = data.stream;
       if (cfg.proxy) stream = stream.replace(cfg.base, cfg.proxy);
-      return stream;
+      return { url: stream, debug: `OK: ${apiUrl}` };
     }
-    return null;
-  } catch { return null; }
+    return { url: null, debug: `No stream field in response from ${apiUrl} — keys: ${Object.keys(data || {}).join(',')}` };
+  } catch (err) {
+    return { url: null, debug: `Error fetching ${apiUrl}: ${err instanceof Error ? err.message : 'unknown'}` };
+  }
 }
 
 export async function resolveStreams(tmdbId: string, type: string, season?: string | null, episode?: string | null): Promise<{ name: string; url: string }[]> {
   const results = await Promise.allSettled(SERVERS.map((cfg) => tryServer(cfg, tmdbId, type, season, episode)));
   const servers: { name: string; url: string }[] = [];
-  results.forEach((r, i) => { if (r.status === "fulfilled" && r.value) servers.push({ name: SERVERS[i].name, url: r.value }); });
+  results.forEach((r, i) => {
+    if (r.status === "fulfilled" && r.value.url) {
+      servers.push({ name: SERVERS[i].name, url: r.value.url });
+    } else {
+      const debug = r.status === "fulfilled" ? r.value.debug : "Promise rejected";
+      console.error(`[resolveStreams] ${SERVERS[i].name}: ${debug}`);
+    }
+  });
   return servers;
+}
+
+export async function resolveStreamsDebug(tmdbId: string, type: string, season?: string | null, episode?: string | null): Promise<{ name: string; url: string; debug: string }[]> {
+  const results = await Promise.allSettled(SERVERS.map((cfg) => tryServer(cfg, tmdbId, type, season, episode)));
+  return results.map((r, i) => ({
+    name: SERVERS[i].name,
+    url: r.status === "fulfilled" && r.value.url ? r.value.url : "",
+    debug: r.status === "fulfilled" ? r.value.debug : "Promise rejected",
+  }));
 }
 
 /* ── Player HTML generator (instant shell, fully proxied) ── */
