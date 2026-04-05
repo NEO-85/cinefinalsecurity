@@ -166,13 +166,15 @@ export async function GET(
     }
   }
 
-  const contentType = response.headers.get("Content-Type") || "";
-  const isM3u8 =
-    contentType.includes("mpegurl") ||
-    contentType.includes("x-mpegURL") ||
-    contentType.includes("vnd.apple.mpegurl");
+const contentType = response.headers.get("Content-Type") || "";
+const bodyText = await response.text();
+const isM3u8 =
+  contentType.includes("mpegurl") ||
+  contentType.includes("x-mpegURL") ||
+  contentType.includes("vnd.apple.mpegurl") ||
+  bodyText.trimStart().startsWith("#EXTM3U");
 
-  if (isM3u8) {
+if (isM3u8) {
     const body = await response.text();
     const effectiveBase = restPath
       ? resolveUrl(activeBase, restPath)
