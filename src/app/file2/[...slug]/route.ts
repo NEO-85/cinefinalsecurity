@@ -218,6 +218,18 @@ export async function GET(
   });
 }
 
+export async function HEAD(
+  request: NextRequest,
+  { params }: { params: Promise<{ slug: string[] }> }
+) {
+  // HLS players send HEAD requests to check if URL exists — return GET without body
+  const response = await GET(request, { params });
+  return new NextResponse(null, {
+    status: response.status,
+    headers: Object.fromEntries(response.headers.entries()),
+  });
+}
+
 export async function OPTIONS() {
   return new NextResponse(null, {
     status: 204,
