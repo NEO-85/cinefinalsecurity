@@ -42,9 +42,6 @@ async function fetchWithRetry(url: string, opts: RequestInit, retries = 1): Prom
   }
 }
 
-/**
- * Rewrite all URLs in m3u8 to use /file2/TOKEN/path format.
- */
 function rewriteM3u8(content: string, baseUrl: string, tokenSlug: string, svParam: string = ""): string {
   const baseOrigin = getOrigin(baseUrl);
   const prefix = "/file2/" + tokenSlug;
@@ -108,32 +105,26 @@ export async function GET(
     return new NextResponse("Invalid path", { status: 400 });
   }
 
-  // First segment = encrypted session token
   const sessionToken = slug[0];
   const restPath = slug.slice(1).join("/");
   const sp = new URL(request.url).searchParams;
   const svIdx = parseInt(sp.get("_sv") || "0");
 
-  // Decode session
   const session = await decodeSessionToken(sessionToken);
   if (!session) {
     return new NextResponse("Invalid or expired session", { status: 403 });
   }
 
-  // Pick the requested server
   const serverIndex = Math.min(svIdx, session.servers.length - 1);
   const activeBase = session.servers[serverIndex] || session.baseUrl;
 
-  // Determine what to fetch
   let fetchUrl: string;
   let refererUrl: string;
 
   if (restPath) {
-    // Has a path → resolve against active server URL
     fetchUrl = resolveUrl(activeBase, restPath);
     refererUrl = activeBase;
   } else {
-    // No path → fetch the active server URL (master m3u8)
     fetchUrl = activeBase;
     refererUrl = activeBase;
   }
@@ -154,7 +145,6 @@ export async function GET(
       redirect: "follow",
     });
   } catch {
-    // Failover to backup servers
     let found = false;
     for (let i = 1; i < session.servers.length; i++) {
       try {
@@ -176,7 +166,6 @@ export async function GET(
     }
   }
 
-  // Check if m3u8 → rewrite URLs
   const contentType = response.headers.get("Content-Type") || "";
   const isM3u8 =
     contentType.includes("mpegurl") ||
@@ -204,7 +193,6 @@ export async function GET(
     });
   }
 
-  // Non-m3u8 (segments, keys) → stream through
   const headers = filterHeaders(response.headers);
   headers.set("Access-Control-Allow-Origin", "*");
   headers.set("Cache-Control", "public, max-age=86400");
@@ -219,15 +207,35 @@ export async function GET(
 }
 
 export async function HEAD(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ slug: string[] }> }
 ) {
-  // HLS players send HEAD requests to check if URL exists — return GET without body
-  const response = await GET(request, { params });
-  return new NextResponse(null, {
-    status: response.status,
-    headers: Object.fromEntries(response.headers.entries()),
-  });
+  try {
+    const { slug } = await params;
+    if (!slug || slug.length < 1) {
+      return new NextResponse(null, { status: 400, headers: corsHeaders() });
+    }
+    const token = slug[0];
+    const session = await decodeSessionToken(token);
+    if (!session) {
+      return new NextResponse(null, { status: 403, headers: corsHeaders() });
+    }
+    return new NextResponse(null, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "no-store",
+        "Accept-Ranges": "bytes",
+      },
+    });
+  } catch {
+    return new NextResponse(null, { status: 500, headers: corsHeaders() });
+  }
+}
+
+function corsHeaders(): Record<string, string> {
+  return { "Access-Control-Allow-Origin": "*" };
 }
 
 export async function OPTIONS() {
