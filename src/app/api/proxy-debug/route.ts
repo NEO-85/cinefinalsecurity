@@ -6,6 +6,8 @@ export const runtime = "edge";
 export const dynamic = "force-dynamic";
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
+const ORIGIN = "https://cinefinalsecurity.vercel.app";
+const REFERER = "https://cinefinalsecurity.vercel.app/";
 
 export async function GET(request: NextRequest) {
   const sp = new URL(request.url).searchParams;
@@ -14,7 +16,6 @@ export async function GET(request: NextRequest) {
   const season = sp.get("s") || null;
   const episode = sp.get("e") || null;
   const sv = parseInt(sp.get("_sv") || "0");
-
   const steps: { step: string; ok: boolean; detail: string }[] = [];
 
   let servers;
@@ -56,21 +57,25 @@ export async function GET(request: NextRequest) {
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 12000);
+
     const res = await fetch(streamUrl, {
       headers: {
         "User-Agent": UA,
         "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9",
-        "Origin": new URL(streamUrl).origin,
-        "Referer": new URL(streamUrl).origin + "/",
+        "Origin": ORIGIN,
+        "Referer": REFERER,
       },
       signal: ctrl.signal,
       redirect: "follow",
     });
+
     clearTimeout(timer);
+
     const contentType = res.headers.get("Content-Type") || "none";
     const body = await res.text();
     const isM3u8 = body.trimStart().startsWith("#EXTM3U");
+
     steps.push({
       step: "fetch_stream",
       ok: res.ok && isM3u8,
