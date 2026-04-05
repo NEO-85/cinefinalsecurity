@@ -1,29 +1,25 @@
 /**
  * ══════════════════════════════════════════════════════════════
- *  CINETARO API — SANDBOX / AD-BLOCK DETECTION MODULE
+ *  CINETARO API — SANDBOX DETECTION MODULE
  * ══════════════════════════════════════════════════════════════
  *
- *  Detects environments that block ads or sandbox the browser:
- *    - Ad-blockers (uBlock Origin, AdBlock Plus, Brave Shields)
+ *  Detects environments that sandbox the browser:
  *    - Headless browsers (Puppeteer, Playwright, Selenium, PhantomJS)
  *    - Browser automation (WebDriver, Nightmare, Cypress)
  *    - DevTools (timing-based + debugger trap)
  *    - Iframe sandbox restrictions
- *    - Privacy/incognito mode indicators
  *    - Request interception (Service Worker, proxy tools)
  *    - Browser fingerprint anomalies
- *    - Challenge-response PoW verification
+ *    - Timing anomalies
  *
  * ══════════════════════════════════════════════════════════════
  */
 
 export interface SandboxConfig {
-  blockAdBlock: boolean;
   blockHeadless: boolean;
   blockDevTools: boolean;
   blockAutomation: boolean;
   blockSandboxedIframe: boolean;
-  blockPrivacyBrowsers: boolean;
   blockRequestInterception: boolean;
   blockTimingAnomalies: boolean;
   blockMessage: string;
@@ -31,52 +27,19 @@ export interface SandboxConfig {
 }
 
 const DEFAULT_CONFIG: SandboxConfig = {
-  blockAdBlock: true,
   blockHeadless: true,
   blockDevTools: true,
   blockAutomation: true,
   blockSandboxedIframe: false,
-  blockPrivacyBrowsers: true,
   blockRequestInterception: true,
   blockTimingAnomalies: true,
-  blockMessage: "Ad Blocker Detected",
-  blockSubMessage: "Please disable your ad blocker or use a standard browser to continue watching.",
+  blockMessage: "Automated Browser Detected",
+  blockSubMessage: "Please use a standard browser to continue watching.",
 };
 
 export function generateSandboxDetection(config: Partial<SandboxConfig> = {}): string {
   const cfg = { ...DEFAULT_CONFIG, ...config };
   const parts: string[] = [];
-
-  // ── Detection: Ad-blocker ──
-  if (cfg.blockAdBlock) {
-    parts.push(`
-function detectAdBlock(){
-  var bait=document.createElement('div');
-  bait.innerHTML='&nbsp;';
-  bait.className='ad ads adsbox ad-placement ad_wrapper pub_300x250 doubleclick ad-placement-text ad_banner ad-placeholder';
-  bait.style.cssText='position:absolute!important;left:-9999px!important;top:-9999px!important;width:1px!important;height:1px!important;overflow:hidden!important;pointer-events:none!important;opacity:0!important;';
-  document.body.appendChild(bait);
-  setTimeout(function(){
-    var blocked=bait.offsetHeight===0||bait.offsetParent===null||getComputedStyle(bait).display==='none'||getComputedStyle(bait).visibility==='hidden';
-    if(blocked)violations.push('adblock_element');
-    try{bait.remove()}catch(e){}
-  },150);
-
-  try{
-    var testFrame=document.createElement('iframe');
-    testFrame.style.cssText='position:absolute!important;left:-9999px!important;top:-9999px!important;width:1px!important;height:1px!important;';
-    testFrame.src='https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js';
-    document.body.appendChild(testFrame);
-    testFrame.onerror=function(){violations.push('adblock_network');try{testFrame.remove()}catch(e){}};
-    setTimeout(function(){try{testFrame.remove()}catch(e){}},200);
-  }catch(e){}
-
-  try{
-    var rafStr=window.requestAnimationFrame.toString();
-    if(rafStr.indexOf('[native code]')===-1)violations.push('adblock_raf_patch');
-  }catch(e){}
-}`);
-  }
 
   // ── Detection: Headless browser ──
   if (cfg.blockHeadless) {
@@ -153,27 +116,6 @@ function detectSandbox(){
 }`);
   }
 
-  // ── Detection: Privacy browsers ──
-  if (cfg.blockPrivacyBrowsers) {
-    parts.push(`
-function detectPrivacyBrowsers(){
-  try{
-    if(navigator.brave&&typeof navigator.brave.isBrave==='function'){
-      navigator.brave.isBrave().then(function(yes){if(yes)violations.push('privacy_brave')}).catch(function(){});
-    }
-  }catch(e){}
-  if(navigator.userAgent.indexOf('Brave')!==-1)violations.push('privacy_brave_ua');
-  if(navigator.userAgent.indexOf('DuckDuckGo')!==-1)violations.push('privacy_duckduckgo');
-  try{if(navigator.globalPrivacyControl)violations.push('privacy_gpc')}catch(e){}
-  if(navigator.doNotTrack==='1')violations.push('privacy_dnt');
-  try{
-    localStorage.setItem('_ctest','1');
-    if(localStorage.getItem('_ctest')!=='1')violations.push('privacy_storage_blocked');
-    localStorage.removeItem('_ctest');
-  }catch(e){violations.push('privacy_storage_blocked')}
-}`);
-  }
-
   // ── Detection: Request interception ──
   if (cfg.blockRequestInterception) {
     parts.push(`
@@ -230,7 +172,16 @@ function showBlocked(){
   try{window.parent.postMessage({event:'sandbox_blocked',violations:violations},'*')}catch(e){}
 }`);
 
-  // ── Main IIFE that runs everything ──
+  // ── Build conditional call list ──
+  const callList: string[] = [];
+  if (cfg.blockHeadless)            callList.push('detectHeadless()');
+  if (cfg.blockDevTools)            callList.push('detectDevTools()');
+  if (cfg.blockAutomation)          callList.push('detectAutomation()');
+  if (cfg.blockSandboxedIframe)     callList.push('detectSandbox()');
+  if (cfg.blockRequestInterception) callList.push('detectRequestInterception()');
+  if (cfg.blockTimingAnomalies)     callList.push('detectTimingAnomalies()');
+  callList.push('detectUAAnomalies()');
+
   const detectionFns = parts.slice(0, -1).join("\n");
   const blockFn = parts[parts.length - 1];
 
@@ -240,14 +191,26 @@ function showBlocked(){
   ${blockFn}
 
   try{
-    detectAdBlock();detectHeadless();detectDevTools();detectAutomation();
-    detectSandbox();detectPrivacyBrowsers();detectRequestInterception();
-    detectTimingAnomalies();detectUAAnomalies();
+    ${callList.join(';')}
   }catch(e){}
 
   setTimeout(function(){
-    var CRITICAL=['headless_webdriver','headless_ua','headless_cdp','headless_selenium','headless_phantom','automation_nightmare','automation_cypress','automation_playwright','ua_bot','adblock_element','adblock_network','adblock_raf_patch','interception_fetch_override','interception_xhr_override','interception_serviceworker','privacy_brave','privacy_brave_ua','privacy_duckduckgo'];
-    var WARNINGS=['headless_no_plugins','headless_no_languages','headless_low_cores','devtools_debugger','devtools_size','timing_manipulated','timing_zero','privacy_dnt','privacy_gpc','privacy_storage_blocked','sandbox_cross_origin','sandbox_no_same_origin','sandbox_cross_origin_frame','ua_short','ua_spoof_desktop','timing_raf_throttled','automation_overridden_native','automation_overridden_plugins','automation_selenium_ide','automation_react_devtools','devtools_timing','devtools_firebug','interception_ws_override','headless_no_screen','headless_no_colordepth','headless_no_chrome','headless_notification','headless_perm_mismatch'];
+    var CRITICAL=[
+      'headless_webdriver','headless_ua','headless_cdp','headless_selenium','headless_phantom',
+      'automation_nightmare','automation_cypress','automation_playwright',
+      'ua_bot',
+      'interception_fetch_override','interception_xhr_override','interception_serviceworker'
+    ];
+    var WARNINGS=[
+      'headless_no_plugins','headless_no_languages','headless_low_cores',
+      'headless_no_screen','headless_no_colordepth','headless_no_chrome',
+      'devtools_debugger','devtools_size','devtools_timing',
+      'timing_manipulated','timing_zero',
+      'sandbox_cross_origin','sandbox_no_same_origin','sandbox_cross_origin_frame',
+      'ua_short',
+      'automation_overridden_native','automation_selenium_ide',
+      'interception_ws_override'
+    ];
     var hasCritical=violations.some(function(v){return CRITICAL.indexOf(v)!==-1});
     var warningCount=violations.filter(function(v){return WARNINGS.indexOf(v)!==-1}).length;
     if(hasCritical||warningCount>=3){showBlocked()}
@@ -277,17 +240,15 @@ export function validateFingerprint(fp: ClientFingerprint): { pass: boolean; sco
   const reasons: string[] = [];
   let score = 100;
 
-  if (!fp.ua || fp.ua.length < 30) { reasons.push("short_ua"); score -= 30; }
-  if (/bot|crawler|spider|scrapy|curl|wget|python/i.test(fp.ua)) { reasons.push("bot_ua"); score -= 50; }
-  if (fp.ua.includes("Headless")) { reasons.push("headless_ua"); score -= 50; }
-  if (fp.cores <= 1) { reasons.push("low_cores"); score -= 15; }
-  if (fp.screenW === 0 || fp.screenH === 0) { reasons.push("no_screen"); score -= 20; }
-  if (fp.colorDepth === 0) { reasons.push("no_colordepth"); score -= 15; }
-  if (!fp.langs || fp.langs.length === 0) { reasons.push("no_languages"); score -= 15; }
-  if (fp.plugins === 0 && !fp.ua.includes("Firefox")) { reasons.push("no_plugins"); score -= 10; }
-  if (fp.WebGL && /swiftshader|llvmpipe|software/i.test(fp.WebGL)) {
-    reasons.push("sw_renderer"); score -= 30;
-  }
+  if (!fp.ua || fp.ua.length < 30)                                        { reasons.push("short_ua");      score -= 30; }
+  if (/bot|crawler|spider|scrapy|curl|wget|python/i.test(fp.ua))          { reasons.push("bot_ua");        score -= 50; }
+  if (fp.ua.includes("Headless"))                                          { reasons.push("headless_ua");   score -= 50; }
+  if (fp.cores <= 1)                                                       { reasons.push("low_cores");     score -= 15; }
+  if (fp.screenW === 0 || fp.screenH === 0)                               { reasons.push("no_screen");     score -= 20; }
+  if (fp.colorDepth === 0)                                                 { reasons.push("no_colordepth"); score -= 15; }
+  if (!fp.langs || fp.langs.length === 0)                                  { reasons.push("no_languages");  score -= 15; }
+  if (fp.plugins === 0 && !fp.ua.includes("Firefox"))                     { reasons.push("no_plugins");    score -= 10; }
+  if (fp.WebGL && /swiftshader|llvmpipe|software/i.test(fp.WebGL))        { reasons.push("sw_renderer");   score -= 30; }
 
   return { pass: score >= 50, score, reasons };
 }
