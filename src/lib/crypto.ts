@@ -16,8 +16,25 @@
  *
  *  FORMAT: [12-byte IV] [AES-GCM ciphertext + 16-byte auth tag]
  *
+ *  All base64 uses URL-safe encoding (no +, /, =) so tokens
+ *  work safely in URL paths like /file2/TOKEN/path
+ *
  * ══════════════════════════════════════════════════════════════
  */
+
+/* ── URL-safe base64 helpers (no +, /, =) ── */
+function toUrlSafeB64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function fromUrlSafeB64(str: string): Uint8Array {
+  let base64 = str.replace(/-/g, "+").replace(/_/g, "/");
+  while (base64.length % 4 !== 0) base64 += "=";
+  return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+}
 
 /* ── CLIENT LAYER ── */
 const CLIENT_PASS = "cinetaro-x7k9-stream-v2-2024";
@@ -64,7 +81,7 @@ async function deriveSessionKey(usage: KeyUsage[]): Promise<CryptoKey> {
   );
 }
 
-/** Create a session token: encrypts {baseUrl, servers, exp} → base64 string */
+/** Create a session token: encrypts {baseUrl, servers, exp} → URL-safe base64 string */
 export async function createSessionToken(data: {
   baseUrl: string;
   servers: string[];
@@ -81,16 +98,16 @@ export async function createSessionToken(data: {
   const result = new Uint8Array(iv.length + encrypted.byteLength);
   result.set(iv, 0);
   result.set(new Uint8Array(encrypted), iv.length);
-  return btoa(String.fromCharCode(...result));
+  return toUrlSafeB64(result.buffer);
 }
 
-/** Decode a session token: base64 → {baseUrl, servers, exp} */
+/** Decode a session token: URL-safe base64 → {baseUrl, servers, exp} */
 export async function decodeSessionToken(
   token: string
 ): Promise<{ baseUrl: string; servers: string[]; exp: number } | null> {
   try {
     const key = await deriveSessionKey(["decrypt"]);
-    const binary = Uint8Array.from(atob(token), (c) => c.charCodeAt(0));
+    const binary = fromUrlSafeB64(token);
     const iv = binary.slice(0, 12);
     const ct = binary.slice(12);
     const decrypted = await crypto.subtle.decrypt(
@@ -104,7 +121,7 @@ export async function decodeSessionToken(
   }
 }
 
-/** Encrypt a URL for use as proxy parameter (for cross-domain m3u8 refs) */
+/** Encrypt a URL for use as proxy parameter (URL-safe base64) */
 export async function encryptUrl(url: string): Promise<string> {
   const key = await deriveSessionKey(["encrypt"]);
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -114,14 +131,14 @@ export async function encryptUrl(url: string): Promise<string> {
   const result = new Uint8Array(iv.length + encrypted.byteLength);
   result.set(iv, 0);
   result.set(new Uint8Array(encrypted), iv.length);
-  return btoa(String.fromCharCode(...result));
+  return toUrlSafeB64(result.buffer);
 }
 
 /** Decrypt a URL from proxy parameter */
 export async function decryptUrl(token: string): Promise<string | null> {
   try {
     const key = await deriveSessionKey(["decrypt"]);
-    const binary = Uint8Array.from(atob(token), (c) => c.charCodeAt(0));
+    const binary = fromUrlSafeB64(token);
     const iv = binary.slice(0, 12);
     const ct = binary.slice(12);
     const decrypted = await crypto.subtle.decrypt(
